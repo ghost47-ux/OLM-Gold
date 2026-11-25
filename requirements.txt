@@ -1,0 +1,12 @@
+# Core runtime (CPU-first). Install PyTorch CPU wheels first, see README.
+numpy>=2.0
+pandas>=2.2
+pyarrow>=15
+duckdb>=1.0
+PyYAML>=6
+requests>=2.31
+python-dotenv>=1.0
+pydantic>=2.6
+fastapi>=0.110
+uvicorn>=0.29
+scipy>=1.11

@@ -1,0 +1,176 @@
+{
+  "prepared_at": "2026-11-25T15:39:47.466243+00:00",
+  "source": "synthetic",
+  "provider": "synthetic-fixture",
+  "symbol": "XAU/USD",
+  "rows": {
+    "5min": 1440,
+    "15min": 480,
+    "1h": 120,
+    "4h": 30
+  },
+  "range": {
+    "5min": [
+      "2024-01-01 00:00:00+00:00",
+      "2024-01-05 23:55:00+00:00"
+    ],
+    "15min": [
+      "2024-01-01 00:00:00+00:00",
+      "2024-01-05 23:45:00+00:00"
+    ],
+    "1h": [
+      "2024-01-01 00:00:00+00:00",
+      "2024-01-05 23:00:00+00:00"
+    ],
+    "4h": [
+      "2024-01-01 00:00:00+00:00",
+      "2024-01-05 20:00:00+00:00"
+    ]
+  },
+  "boundaries": {
+    "train_end": "2024-01-05 07:15:00+00:00",
+    "val_end": "2024-01-05 15:30:00+00:00",
+    "embargo_minutes": 60
+  },
+  "meta": {
+    "samples_total": 223,
+    "rejected": {
+      "alignment": 957,
+      "history": 256,
+      "aggregation": 0
+    },
+    "train": 156,
+    "val": 29,
+    "test": 30,
+    "temporal_dim": 14,
+    "temporal_features": [
+      "hour_sin",
+      "hour_cos",
+      "dow_sin",
+      "dow_cos",
+      "session_asia",
+      "session_london",
+      "session_new_york",
+      "session_overlap",
+      "asia_since_open",
+      "asia_until_close",
+      "london_since_open",
+      "london_until_close",
+      "new_york_since_open",
+      "new_york_until_close"
+    ]
+  },
+  "normalizer": {
+    "mean": [
+      0.0,
+      -1.1994466442504244e-05,
+      -9.134138655000498,
+      -9.133630912089734
+    ],
+    "std": [
+      1.0,
+      0.00033850594746523855,
+      1.0495155342203286,
+      1.0218254769930366
+    ]
+  },
+  "normalizer_hash": "e030efcdb62ef18f",
+  "temporal": {
+    "enabled": true,
+    "include_sessions": true,
+    "include_events": false,
+    "events_path": "data/events/us_events.csv",
+    "event_window_minutes": 480,
+    "sessions": {
+      "asia": {
+        "tz": "Asia/Tokyo",
+        "open": "09:00",
+        "close": "18:00"
+      },
+      "london": {
+        "tz": "Europe/London",
+        "open": "08:00",
+        "close": "16:30"
+      },
+      "new_york": {
+        "tz": "America/New_York",
+        "open": "09:30",
+        "close": "16:00"
+      }
+    }
+  },
+  "validation": {
+    "5min": {
+      "ok": true,
+      "stats": {
+        "rows": 1440,
+        "duplicates": 0,
+        "nonfinite_rows": 0,
+        "nonpositive_rows": 0,
+        "invalid_high": 0,
+        "invalid_low": 0,
+        "interval_minutes": 5
+      },
+      "errors": [],
+      "warnings": []
+    },
+    "15min": {
+      "ok": true,
+      "stats": {
+        "rows": 480,
+        "duplicates": 0,
+        "nonfinite_rows": 0,
+        "nonpositive_rows": 0,
+        "invalid_high": 0,
+        "invalid_low": 0,
+        "interval_minutes": 15
+      },
+      "errors": [],
+      "warnings": []
+    },
+    "1h": {
+      "ok": true,
+      "stats": {
+        "rows": 120,
+        "duplicates": 0,
+        "nonfinite_rows": 0,
+        "nonpositive_rows": 0,
+        "invalid_high": 0,
+        "invalid_low": 0,
+        "interval_minutes": 60
+      },
+      "errors": [],
+      "warnings": []
+    },
+    "4h": {
+      "ok": true,
+      "stats": {
+        "rows": 30,
+        "duplicates": 0,
+        "nonfinite_rows": 0,
+        "nonpositive_rows": 0,
+        "invalid_high": 0,
+        "invalid_low": 0,
+        "interval_minutes": 240
+      },
+      "errors": [],
+      "warnings": []
+    }
+  },
+  "leakage": {
+    "ok": true,
+    "train": [
+      1704298500,
+      1704438000
+    ],
+    "val": [
+      1704442500,
+      1704467700
+    ],
+    "test": [
+      1704472200,
+      1704498300
+    ]
+  },
+  "synthetic": true
+}

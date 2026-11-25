@@ -1,0 +1,7 @@
+inference:
+  checkpoint: artifacts/checkpoints/best.pt
+  scenarios: 32
+  seed: null
+  prediction_log: artifacts/predictions/predictions.jsonl
+  host: 127.0.0.1
+  port: 8000

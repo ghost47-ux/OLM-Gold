@@ -1,0 +1,16 @@
+data:
+  symbol: XAU/USD
+  provider: twelvedata
+  exchange: Commodity Aggregate
+  timezone: UTC
+  base_interval: 5min
+  parent_interval: 15min
+  context_intervals: [1h, 4h]
+  train_fraction: 0.70
+  val_fraction: 0.15
+  test_fraction: 0.15
+  embargo_minutes: 60
+  cache_dir: cache
+  data_root: data
+  synthetic_days: 90
+  synthetic_seed: 7

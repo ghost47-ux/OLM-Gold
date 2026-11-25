@@ -1,0 +1,22 @@
+# OLM-Gold model configuration. Shapes are documented in ARCHITECTURE.md.
+model:
+  profile: cpu-research
+  d_model: 128
+  n_layers: 4
+  n_heads: 4
+  d_ff: 384
+  dropout: 0.0
+  n_components: 4
+  min_scale: 1.0e-4
+  context_encoder_layers: 2
+  use_context: true
+  use_temporal: true
+  use_events: false
+  use_xfactor: false
+  latent_dim: 8
+  xfactor_beta: 0.01
+  m5_context: 192
+  m15_context: 64
+  h1_context: 32
+  h4_context: 16
+  n_scenarios: 32

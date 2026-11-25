@@ -1,0 +1,10 @@
+temporal:
+  enabled: true
+  include_sessions: true
+  include_events: false
+  events_path: data/events/us_events.csv
+  event_window_minutes: 480
+  sessions:
+    asia: {tz: Asia/Tokyo, open: '09:00', close: '18:00'}
+    london: {tz: Europe/London, open: '08:00', close: '16:30'}
+    new_york: {tz: America/New_York, open: '09:30', close: '16:00'}
