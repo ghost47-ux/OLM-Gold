@@ -20,3 +20,4 @@ model:
   h1_context: 32
   h4_context: 16
   n_scenarios: 32
+  parent_teacher_forcing_prob: 1.0

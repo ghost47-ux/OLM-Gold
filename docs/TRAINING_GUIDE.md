@@ -47,7 +47,7 @@ This writes `XAUUSD_synthetic_{1min,5min,15min,1h,4h}.parquet` plus a prepared m
 
 6. After written training permission, set `TD_MODEL_TRAINING_APPROVED=true`.
 
-Bulk retention and provider-data training are blocked by default. Do not enable a gate without actual permission.
+Bulk retention and provider-data training are blocked by default. Do not enable a gate without actual permission. In this checkout the backfill is complete and `TD_DATA_RETENTION_APPROVED=true`, but `TD_MODEL_TRAINING_APPROVED=false`; no real-data optimization has been run.
 
 ## 3. Prepare tensors
 
@@ -55,7 +55,9 @@ Bulk retention and provider-data training are blocked by default. Do not enable 
 .\.venv\Scripts\python.exe -m olm prepare-datasets --source twelvedata --json
 ```
 
-Outputs split sizes, boundaries, temporal feature names, normalizer statistics, array hashes and a leakage check. The corrected 90-day synthetic fixture yields **5,857 train / 1,251 validation / 1,252 test** samples (the counts are lower than the pre-fix 5,868/1,253/1,254 because the H1/H4 close-before-target rule rejects a few boundary samples). Exact counts depend on gaps, alignment and history.
+Outputs split sizes, boundaries, temporal feature names, normalizer statistics, a normalizer content hash and a leakage check. The corrected 90-day synthetic fixture yields **5,857 train / 1,251 validation / 1,252 test** samples (the counts are lower than the pre-fix 5,868/1,253/1,254 because the H1/H4 close-before-target rule rejects a few boundary samples). Exact counts depend on gaps, alignment and history.
+
+The staged real 2024-2026 Twelve Data dataset prepares as **56,709 train / 12,153 validation / 12,154 test**. Its boundaries are frozen at `2026-03-18 01:45Z` (train end) and `2026-07-22 18:45Z` (validation end), with a 60-minute embargo. The split boundary uses the candidate timestamp universe before the exact-child-timestamp filter, so removing malformed windows cannot move the test period. The final test partition is unchanged at 12,154 samples and has not been used for development decisions.
 
 ## 4. Train
 
@@ -77,20 +79,31 @@ Useful flags:
 | `--threads N` | PyTorch CPU threads; benchmark before choosing |
 | `--num-workers N` | DataLoader processes; 0 is usually best on Windows for this small dataset |
 | `--parent-teacher-forcing P` | Probability of feeding the actual parent to the child decoder; 1.0 is full teacher forcing, lower values expose predicted-parent errors |
+| `--no-day-balance` | Disable inverse-weekday sampling and use uniform shuffled windows |
 | `--skip-validation` | Skip per-frame validation (not recommended for provider data) |
 
 Run outputs:
 
 ```
 artifacts/runs/<run-name>-<utc>-<id>/run.json
-artifacts/runs/<run-name>-<utc>-<id>/metrics.jsonl
+artifacts/runs/<run-name>-<utc>-<id>/metrics.jsonl       # one row per epoch
+artifacts/runs/<run-name>-<utc>-<id>/batches.jsonl       # one row per optimizer step
+artifacts/runs/<run-name>-<utc>-<id>/status.json         # atomic latest-state snapshot
+artifacts/runs/<run-name>-<utc>-<id>/learning_curves.svg # 2x2 training/validation curves
 artifacts/checkpoints/<run-name>-<utc>-<id>_best.pt
 artifacts/checkpoints/<run-name>-<utc>-<id>_last.pt
 ```
 
-Training logs every `log_every` steps and at each epoch end. Validation runs after every epoch; early stopping uses `patience` and `min_delta`. Checkpoints are complete: model, optimizer, scheduler, epoch, global step, config, normalizer, dataset metadata and best validation.
+Every batch row records total/parent/child/aggregate/consistency/KL losses, learning rate, gradient norm, batch size and samples/second. Every epoch row records the same losses plus validation price, calibration and baseline metrics. `status.json` is replaced atomically after each batch, so a monitor never observes a half-written file. The SVG is regenerated at each epoch and never aborts training if rendering fails.
 
-Resume:
+```powershell
+.\.venv\Scripts\python.exe -m olm monitor --json
+.\.venv\Scripts\python.exe -m olm monitor --run-dir artifacts/runs/<run-name>-<utc>-<id>
+```
+
+Validation runs after every epoch; early stopping uses `patience` and `min_delta`. Checkpoints are complete: model, optimizer, scheduler, epoch, global step, config, normalizer, dataset metadata and best validation. The old 12-epoch synthetic checkpoint is invalid because it was trained with H1/H4 lookahead; do not resume it. Start any new run from fresh initialization.
+
+Resume is supported only for a checkpoint that is known-good under the current leakage and child-alignment rules:
 
 ```powershell
 .\.venv\Scripts\python.exe -m olm train --source synthetic --data-root artifacts/synth90 --resume artifacts/checkpoints/<run>_last.pt --epochs 12 --run-name synth90_resume --json
@@ -112,10 +125,11 @@ The evaluator refuses a checkpoint whose normalizer does not match the rebuilt d
 - Model-space parent/child NLL (training objective coordinates).
 - CRPS and 50/90% empirical coverage from scenario samples.
 - Aggregation log error between predicted child means and the actual parent.
+- Persistence baselines and training-only AR(1) baselines. Parent AR(1) is one-step. Child AR(1) is a recursive M5 baseline: each predicted candle becomes the next state, so it is deliberately not teacher-forced.
 - Free-running three-child metrics, clearly separated from teacher-forced metrics.
 - Optional sequential block metrics (`--folds`), with an explicit note that the model is not retrained per block.
 
-Teacher-forced child metrics condition on the actual parent and actual earlier children. They are not scenario quality.
+Teacher-forced child metrics condition on the actual parent and actual earlier children. They are not scenario quality. Free-running metrics condition only on the predicted parent and start from the last observed M5 close.
 
 ## 6. Baseline and experiment hygiene
 
@@ -125,9 +139,13 @@ Teacher-forced child metrics condition on the actual parent and actual earlier c
 .\.venv\Scripts\python.exe -m olm experiment show <run-id> --json
 ```
 
-`evaluate` reports persistence MAE beside model MAE. AR1 exists in `olm/evaluation/baselines.py` but is not yet wired into the report; do not describe the report as a complete baseline study. `--no-context` trains a genuine M5-only ablation, but it must be trained separately; wrapping a context model would be invalid.
+`evaluate` reports persistence and AR(1) MAE beside model MAE. AR(1) parameters are fitted only on contiguous training-split pairs and are never learned by the network. `benchmark --no-update` measures forward/backward throughput without an optimizer step; it is a hardware benchmark, not a training run. `--no-context` trains a genuine M5-only ablation, but it must be trained separately; wrapping a context model would be invalid.
 
 Compare runs only on the same split, normalizer, context lengths and temporal configuration. The champion registry requires configured metrics to be present and finite, a minimum test sample count and a minimum improvement over the primary metric.
+
+### Weekend sessions and day balancing
+
+The real provider feed contains full Saturday/Sunday M5 sessions from **2025-04-26 00:00Z** onward; earlier weekends are sparse. Weekend candles are genuinely thinner (mean M5 range 0.7242 versus 3.0862 on weekdays) and are retained as observed, not deleted or filled. Because the chronological split leaves weekends at **8.2% of train** but **about 28.4% of validation/test**, `day_balance: true` samples training weekdays with inverse frequency over the UTC weekday. Missing weekdays get zero weight; validation and test loaders are not resampled. Disable it with `--no-day-balance` for an ablation, and report both results if you compare them.
 
 ## 7. Forecast
 

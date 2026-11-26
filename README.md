@@ -2,7 +2,7 @@
 
 OLM-Gold is a CPU-trainable, autoregressive probabilistic foundation model for **XAU/USD** OHLC candles. It learns the joint distribution of a 15-minute parent candle and its exactly three 5-minute children, conditioned on multi-resolution history, the clock and optional event features.
 
-> **Research software, not a trading system.** It does not place orders, size positions, or claim an economic edge. Probabilistic forecasts are research output, not investment advice. The bundled demonstration dataset is **synthetic** and is never presented as market history.
+> **Research software, not a trading system.** It does not place orders, size positions, or claim an economic edge. Probabilistic forecasts are research output, not investment advice. The bundled demonstration dataset is **synthetic** and is never presented as market history. A real 2024-2026 Twelve Data backfill is staged locally; no real-data optimization has been authorized (`TD_MODEL_TRAINING_APPROVED=false`).
 
 ## The hierarchy contract
 
@@ -24,10 +24,10 @@ Dataset construction rejects any candidate whose M5 children do not reconstruct 
 - Invertible candle encoding with a wick softplus, K-component 4-D Gaussian mixtures (Cholesky parameterised), and a Jacobian-corrected candle-space likelihood.
 - Causal pre-LN Transformer over M5 history, shared causal context encoders for M15/H1/H4, learned timeframe and sinusoidal position embeddings, 14 clock/session features.
 - M15 parent head, sequential M5 child decoder trained with teacher forcing, and three multi-task losses: parent NLL, child NLL, child-aggregate reconstruction and parent/child consistency.
-- Chronological train/validation/test splits with an embargo, training-only normalizer, complete checkpoints, resume, early stopping, JSONL metrics.
+- Chronological train/validation/test splits with an embargo, training-only normalizer, complete checkpoints, resume, early stopping, batch-level and epoch-level JSONL metrics, a persistent status file and dependency-free SVG learning curves.
 - Point, probabilistic and calibration metrics (MAE, model-space NLL, CRPS, 50/90% coverage, aggregation error), free-running multi-step evaluation, sequential time-block stability reports, baselines.
 - FastAPI service (`/health`, `/v1/model`, `/v1/forecast`, `/v1/actual`, `/v1/predictions/{id}`), append-only forecast log, PSI/KS drift checks, experiment tracker and champion/challenger registry.
-- 55 offline tests covering encoding, aggregation, validation, provider parsing, credentials, splits, point-in-time context, model shapes, losses, training, inference, API and monitoring.
+- 59 offline tests covering encoding, aggregation, validation, provider parsing, credentials, splits, point-in-time context, child-window alignment, teacher-forcing dependency, AR(1) fitting, model shapes, losses, training, inference, API and monitoring.
 
 ## Quick start (Windows, CPU)
 
@@ -71,12 +71,12 @@ See [docs/DATA_LICENSE_AND_PROVIDER_NOTES.md](docs/DATA_LICENSE_AND_PROVIDER_NOT
 
 ## Data preparation and leakage controls
 
-- Splits are chronological: 70% train, 15% validation, 15% test, with a 60-minute embargo. Timestamps never cross splits.
+- Splits are chronological: 70% train, 15% validation, 15% test, with a 60-minute embargo. The split boundary is computed from the candidate timestamp universe before the child-timestamp validity filter, so correcting malformed child windows cannot move the frozen test period. Timestamps never cross splits.
 - The normalizer is fit **only** on M5 rows before the training cutoff, then applied to every resolution.
 - Samples need full M5/M15/H1/H4 context before the target, so the first usable part of the sample is discarded rather than padded.
 - H1/H4 context is selected from the last bar that has **closed at or before the target start**. The earlier implementation selected the bar containing the target, which leaked future prices; `leakage_check` now asserts zero leaking context bars in every split.
-- Market closures stay as timestamp gaps. Aggregation never fills missing candles; incomplete buckets are dropped.
-- Teacher-forced one-step metrics and free-running three-child scenarios are reported separately; falling training loss alone is not evidence of forecast skill.
+- Market closures stay as timestamp gaps. Aggregation never fills missing candles; incomplete buckets are dropped. The provider feed expands to full Saturday/Sunday sessions from 2025-04-26; those bars are retained, not deleted or synthesised. Training optionally uses inverse-weekday sampling (`day_balance: true`) because weekends are 8.2% of train but 28.4% of validation/test.
+- Teacher-forced one-step metrics and free-running three-child scenarios are reported separately; falling training loss alone is not evidence of forecast skill. Persistence uses the last observed close; AR(1) is fitted only on contiguous training-split pairs.
 
 ## CLI
 
@@ -87,12 +87,13 @@ See [docs/DATA_LICENSE_AND_PROVIDER_NOTES.md](docs/DATA_LICENSE_AND_PROVIDER_NOT
 | `inspect-data` / `validate-data` | Schema, gaps, OHLC validity and hierarchy checks. |
 | `download-history` | Gated, resumable Twelve Data retrieval; `--dry-run` is network-free. |
 | `prepare-datasets` | Build aligned arrays, splits, normalizer and manifest. |
-| `train` | Teacher-forced training with checkpoints and early stopping. |
+| `train` | Teacher-forced training with checkpoints, early stopping and per-batch/per-epoch observability. |
 | `evaluate` | Test/validation metrics, free-running quality, optional `--folds` stability blocks. |
-| `benchmark` | CPU parameter count and samples/second. |
+| `benchmark` | CPU parameter count and samples/second; `--no-update` measures backward without an optimizer step. |
 | `forecast` | Sample parent + three children, log the result, optionally write JSON. |
 | `serve` | Run the FastAPI service. |
 | `usage` | Per-account request/error/cooldown report. |
+| `monitor` | Print the latest run's status, last epoch and last batch. |
 | `experiment` | List runs, show a run, promote a challenger under fixed criteria. |
 
 All commands accept repeatable `--config`, `--data-root` and most support `--json`.
@@ -135,8 +136,10 @@ docs/            design, research decisions, data dictionary, guides, notes
 ## Known limitations
 
 - The current demonstration checkpoint is trained on **synthetic** data for one epoch; its metrics show an underfit model, not that it forecasts gold. The earlier 12-epoch synthetic checkpoint is invalid for evaluation because it was trained with H1/H4 lookahead.
-- The live 2024-2026 backfill has not been run in this repository: no API keys are present and the retention/training gates remain closed. See [the audit](docs/AUDIT_REPORT.md) for exact status.
+- The 2024-2026 Twelve Data backfill **has** been run and staged locally (five accounts, 439 windows, zero failures). No real-data optimization has been run: `TD_MODEL_TRAINING_APPROVED` is still `false`. See [the experiment log](docs/EXPERIMENT_LOG.md) and [the audit](docs/AUDIT_REPORT.md).
 - No live brokerage integration, execution, position sizing or P&L claims.
 - Twelve Data plans, symbol coverage and rate limits vary by account; verify entitlements before relying on the ingestion path.
 - The coherence projection enforces the OHLC hierarchy after sampling. It improves internal consistency but can mask raw parent/child disagreement; the raw gap is always reported.
+- The train/validation/test weekend share is uneven (about 8.2% / 28.4% / 28.4%) because the provider feed expanded to full weekends in April 2025. Day-balanced sampling reduces the training imbalance but does not erase the covariate shift.
+- 26 malformed child windows were rejected because their M5 timestamps were not exactly `target + 0/5/10 minutes`. They are not silently repaired, and the frozen 12,154-sample test partition is unchanged.
 - CPU training is practical for research-scale runs but not for large-scale pretraining. See the measured throughput in the experiment log.

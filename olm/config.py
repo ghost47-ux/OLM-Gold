@@ -94,6 +94,8 @@ class TrainingConfig:
     checkpoint_dir: str = 'artifacts/checkpoints'
     run_dir: str = 'artifacts/runs'
     log_every: int = 20
+    eval_samples: int = 8
+    day_balance: bool = True
     device: str = 'auto'
 
 

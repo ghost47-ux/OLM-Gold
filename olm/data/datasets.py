@@ -70,12 +70,12 @@ def _candidate_samples(m5: ResolutionArrays, m15: ResolutionArrays, h1: Resoluti
     horizon = 3
     if n <= horizon:
         raise ValueError('not enough M5 candles to build samples')
-    minute_of_day = (m5.ts.astype('datetime64[m]').astype(np.int64) // 15) * 15
     aligned = m5.ts.astype('datetime64[m]').astype(np.int64) % 15 == 0
     p15_map = _index_map(m5.ts, m15.ts)
     h1_map = _completed_index(m5.ts, h1.ts, 60)
     h4_map = _completed_index(m5.ts, h4.ts, 240)
     cand = []
+    boundary = []
     rejected = {'alignment': 0, 'history': 0, 'aggregation': 0}
     for i in range(n - horizon):
         k = i + 1
@@ -95,10 +95,13 @@ def _candidate_samples(m5: ResolutionArrays, m15: ResolutionArrays, h1: Resoluti
             rejected['history'] += 1
             continue
         children = m5.prices[k : k + horizon]
-        parent = m15.prices[p15]
+        child_ts = m5.ts[k : k + horizon]
+        expected_ts = m5.ts[k] + np.arange(horizon) * np.timedelta64(5, 'm')
         if len(children) != horizon:
-            rejected['aggregation'] += 1
+            rejected['alignment'] += 1
             continue
+        timestamps_ok = np.array_equal(child_ts, expected_ts)
+        parent = m15.prices[p15]
         reconstructed = np.array([
             children[0, 0],
             children[:, 1].max(),
@@ -108,8 +111,16 @@ def _candidate_samples(m5: ResolutionArrays, m15: ResolutionArrays, h1: Resoluti
         if not np.allclose(reconstructed, parent, rtol=1e-10, atol=1e-10):
             rejected['aggregation'] += 1
             continue
+        # Keep the pre-fix candidate universe for chronological split boundaries.
+        # A missing M5 bar can leave later bars that coincidentally aggregate to
+        # the M15 parent; such windows are excluded as training samples but must
+        # not move the frozen test period when the alignment rule is corrected.
+        boundary.append((i, p15, j1, j4))
+        if not timestamps_ok:
+            rejected['alignment'] += 1
+            continue
         cand.append((i, p15, j1, j4))
-    return np.asarray(cand, dtype=np.int64), rejected
+    return np.asarray(cand, dtype=np.int64), np.asarray(boundary, dtype=np.int64), rejected
 
 
 def _split_boundaries(target_ts: np.ndarray, config: Config) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -185,11 +196,14 @@ def build_datasets(config: Config, frames: dict[str, pd.DataFrame], temporal) ->
         '4h': prepare_resolution(frames['4h'], temporal),
     }
     m5, m15 = arrays['5min'], arrays['15min']
-    candidates, rejected = _candidate_samples(m5, m15, arrays['1h'], arrays['4h'], config)
+    candidates, boundary_candidates, rejected = _candidate_samples(
+        m5, m15, arrays['1h'], arrays['4h'], config
+    )
     if not len(candidates):
         raise ValueError('no valid parent/child samples; check aggregation alignment and history')
     target_ts = m5.ts[candidates[:, 0] + 1]
-    train_end, val_end = _split_boundaries(target_ts, config)
+    boundary_ts = m5.ts[boundary_candidates[:, 0] + 1]
+    train_end, val_end = _split_boundaries(boundary_ts, config)
     train_mask = target_ts < np.datetime64(train_end.tz_convert('UTC').tz_localize(None))
     val_mask = (target_ts >= np.datetime64((train_end + pd.Timedelta(minutes=config.data.embargo_minutes)).tz_convert('UTC').tz_localize(None))) & (
         target_ts < np.datetime64(val_end.tz_convert('UTC').tz_localize(None))

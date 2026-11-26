@@ -26,6 +26,7 @@ from olm.data.credentials import AuthorizationGates, RequestScheduler, build_sch
 from olm.data.ingestion import IngestionService, summarize_dataset
 from olm.data.storage import DataPaths
 from olm.data.validation import validate_frame
+from olm.evaluation.baselines import fit_ar1_bundle
 from olm.evaluation.metrics import collect_predictions, evaluate_predictions
 from olm.evaluation.blocks import evaluate_sequential_blocks
 from olm.evaluation.free_running import evaluate_free_running
@@ -251,6 +252,8 @@ def cmd_train(args) -> int:
         config.training.lr = args.lr
     if args.no_context:
         config.model.use_context = False
+    if args.no_day_balance:
+        config.training.day_balance = False
     if args.device:
         config.training.device = args.device
     frames, info = load_market_frames(config, source=args.source)
@@ -283,7 +286,10 @@ def cmd_evaluate(args) -> int:
     from torch.utils.data import DataLoader
 
     loader = DataLoader(split, batch_size=config.training.eval_batch_size, shuffle=False)
-    data = collect_predictions(model, loader, config, 'cpu', bundle.normalizer, n_samples=args.samples)
+    ar1_params = fit_ar1_bundle(bundle)
+    data = collect_predictions(
+        model, loader, config, 'cpu', bundle.normalizer, n_samples=args.samples, ar1_params=ar1_params
+    )
     evaluation = evaluate_predictions(data)
     free_running = evaluate_free_running(model, loader, config, 'cpu', bundle.normalizer)
     payload = {
@@ -297,7 +303,8 @@ def cmd_evaluate(args) -> int:
     }
     if args.folds > 1:
         payload['sequential_blocks'] = evaluate_sequential_blocks(
-            model, split, config, 'cpu', bundle.normalizer, folds=args.folds, n_samples=max(4, args.samples // 2)
+            model, split, config, 'cpu', bundle.normalizer, folds=args.folds,
+            n_samples=max(4, args.samples // 2), ar1_params=ar1_params,
         )
     if args.report:
         write_report(args.report, payload)
@@ -314,23 +321,32 @@ def cmd_benchmark(args) -> int:
     model = build_model(config.model, bundle.meta['temporal_dim'])
     device = resolve_device(config.training.device)
     model.to(device)
-    item = bundle.train[0]
-    batch = {key: value.unsqueeze(0).repeat(args.batch_size, *([1] * value.dim())).to(device) for key, value in item.items()}
+    actual_batch = min(int(args.batch_size), len(bundle.train))
+    rng = np.random.default_rng(config.training.seed)
+    indices = rng.choice(len(bundle.train), size=actual_batch, replace=False)
+    items = [bundle.train[int(index)] for index in indices]
+    batch = {
+        key: torch.stack([item[key] for item in items]).to(device)
+        for key in items[0]
+    }
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.training.lr)
     model.train()
+    from olm.training.losses import compute_losses
+
+    update = not args.no_update
     for _ in range(args.warmup):
         optimizer.zero_grad(set_to_none=True)
-        from olm.training.losses import compute_losses
-
         losses = compute_losses(model(batch), batch, config, bundle.normalizer)
         losses.total.backward()
-        optimizer.step()
+        if update:
+            optimizer.step()
     start = time.perf_counter()
     for _ in range(args.steps):
         optimizer.zero_grad(set_to_none=True)
         losses = compute_losses(model(batch), batch, config, bundle.normalizer)
         losses.total.backward()
-        optimizer.step()
+        if update:
+            optimizer.step()
     elapsed = time.perf_counter() - start
     with torch.no_grad():
         model.eval()
@@ -341,11 +357,46 @@ def cmd_benchmark(args) -> int:
     payload = {
         'parameters': model.parameter_count(),
         'device': device,
-        'batch_size': args.batch_size,
+        'batch_size': actual_batch,
+        'updates_parameters': update,
         'train_ms_per_step': round(1000 * elapsed / args.steps, 2),
-        'train_samples_per_second': round(args.batch_size * args.steps / elapsed, 2),
+        'train_samples_per_second': round(actual_batch * args.steps / elapsed, 2),
         'forward_ms_per_batch': round(1000 * inference / args.steps, 2),
         'threads': torch.get_num_threads(),
+    }
+    _print(payload, args.json)
+    return 0
+
+
+def cmd_monitor(args) -> int:
+    config = _config(args)
+    if args.run_dir:
+        run_dir = Path(args.run_dir)
+    else:
+        root = Path(config.training.run_dir)
+        candidates = [path for path in root.glob('*') if (path / 'status.json').exists() or (path / 'metrics.jsonl').exists()]
+        if not candidates:
+            raise FileNotFoundError(f'no runs found under {root}')
+        run_dir = max(candidates, key=lambda path: path.stat().st_mtime)
+    status = {}
+    if (run_dir / 'status.json').exists():
+        status = json.loads((run_dir / 'status.json').read_text(encoding='utf-8'))
+    last_epoch = {}
+    if (run_dir / 'metrics.jsonl').exists():
+        lines = [line for line in (run_dir / 'metrics.jsonl').read_text(encoding='utf-8').splitlines() if line.strip()]
+        if lines:
+            last_epoch = json.loads(lines[-1])
+    last_batch = {}
+    if (run_dir / 'batches.jsonl').exists():
+        lines = [line for line in (run_dir / 'batches.jsonl').read_text(encoding='utf-8').splitlines() if line.strip()]
+        if lines:
+            last_batch = json.loads(lines[-1])
+    payload = {
+        'run_dir': str(run_dir),
+        'status': status,
+        'last_epoch': last_epoch,
+        'last_batch': last_batch,
+        'curves_svg': str(run_dir / 'learning_curves.svg'),
     }
     _print(payload, args.json)
     return 0
@@ -461,6 +512,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--threads', type=int, default=None, help='PyTorch CPU threads')
     p.add_argument('--num-workers', type=int, default=None, help='DataLoader worker processes')
     p.add_argument('--parent-teacher-forcing', type=float, default=None, help='probability of feeding the actual parent to the child decoder (1.0 = full teacher forcing)')
+    p.add_argument('--no-day-balance', action='store_true', help='disable inverse-weekday training sampler')
     p.add_argument('--skip-validation', action='store_true'); p.add_argument('--json', action='store_true')
     p.set_defaults(func=cmd_train)
 
@@ -473,8 +525,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser('benchmark')
     _add_common(p); p.add_argument('--source', default='auto', choices=['auto', 'synthetic', 'twelvedata'])
     p.add_argument('--batch-size', type=int, default=32); p.add_argument('--steps', type=int, default=5); p.add_argument('--warmup', type=int, default=2)
+    p.add_argument('--no-update', action='store_true', help='measure forward/backward throughput without optimizer updates')
     p.add_argument('--threads', type=int, default=None); p.add_argument('--json', action='store_true')
     p.set_defaults(func=cmd_benchmark)
+
+    p = sub.add_parser('monitor')
+    _add_common(p); p.add_argument('--run-dir', default=None); p.add_argument('--json', action='store_true')
+    p.set_defaults(func=cmd_monitor)
 
     p = sub.add_parser('forecast')
     _add_common(p); p.add_argument('--checkpoint', default=None); p.add_argument('--source', default='auto', choices=['auto', 'synthetic', 'twelvedata'])

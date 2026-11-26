@@ -1,7 +1,10 @@
 """Sequential block evaluation and append-only prediction log."""
 
+import numpy as np
+
 from olm.data.calendar import TemporalFeatures
 from olm.data.datasets import build_datasets
+from olm.evaluation.baselines import fit_ar1_pairs
 from olm.evaluation.blocks import block_bounds, evaluate_sequential_blocks
 from olm.models.olm import build_model
 from olm.monitoring.prediction_log import PredictionLog
@@ -10,6 +13,15 @@ from olm.monitoring.prediction_log import PredictionLog
 def test_block_bounds_cover_every_sample():
     assert block_bounds(10, 3) == [(0, 3), (3, 6), (6, 10)]
     assert block_bounds(7, 7) == [(i, i + 1) for i in range(7)]
+
+
+def test_ar1_least_squares_recovers_a_known_linear_map():
+    rng = np.random.default_rng(0)
+    prev = rng.normal(size=(200, 4))
+    nxt = 0.25 + 2.0 * prev
+    intercept, transition = fit_ar1_pairs(prev, nxt)
+    assert np.allclose(intercept, 0.25, atol=1e-10)
+    assert np.allclose(transition, 2.0 * np.eye(4), atol=1e-10)
 
 
 def test_sequential_blocks_report_chronological_metrics(tiny_config, synthetic_frames):

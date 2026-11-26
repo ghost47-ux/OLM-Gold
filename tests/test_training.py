@@ -1,7 +1,9 @@
 """Checkpoint round-trip, resume and a short optimisation smoke test."""
 
+import json
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from olm.data.calendar import TemporalFeatures
@@ -49,8 +51,15 @@ def test_trainer_writes_checkpoints_and_resumes(tiny_config, synthetic_frames, t
     resumed = Trainer(config=tiny_config, bundle=bundle, run_name='resume')
     summary2 = resumed.fit(resume_from=str(last), max_steps=4)
     assert summary2['global_step'] == 4
-    metrics = Path(tiny_config.training.run_dir) / 'resume' / 'metrics.jsonl'
+    run_dir = Path(tiny_config.training.run_dir) / 'resume'
+    metrics = run_dir / 'metrics.jsonl'
     assert metrics.exists() and len(metrics.read_text().strip().splitlines()) >= 1
+    batches = run_dir / 'batches.jsonl'
+    assert batches.exists() and len(batches.read_text().strip().splitlines()) >= 2
+    assert (run_dir / 'status.json').exists()
+    assert (run_dir / 'learning_curves.svg').exists()
+    last = json.loads(metrics.read_text().strip().splitlines()[-1])
+    assert 'parent_mae_ar1' in last['val'] and 'child_mae_ar1_recursive' in last['val']
 
 
 def test_training_decreases_loss_on_a_fixed_batch(tiny_config, synthetic_frames):
@@ -72,3 +81,16 @@ def test_training_decreases_loss_on_a_fixed_batch(tiny_config, synthetic_frames)
         loss.backward()
         optimizer.step()
     assert float(loss.detach()) < first
+
+def test_day_balance_weights_give_each_weekday_equal_mass(tiny_config, synthetic_frames):
+    tiny_config.training.run_dir = "artifacts/test-runs"
+    tiny_config.training.checkpoint_dir = "artifacts/test-checkpoints"
+    bundle = _bundle(tiny_config, synthetic_frames)
+    trainer = Trainer(config=tiny_config, bundle=bundle, run_name="weights")
+    weights = trainer._day_balance_weights().numpy()
+    target_ts = bundle.train.targets["target_ts"].astype("datetime64[s]")
+    dow = (target_ts.astype("datetime64[D]").astype(np.int64) + 3) % 7
+    mass = np.bincount(dow, weights=weights, minlength=7)
+    present = np.bincount(dow, minlength=7) > 0
+    assert np.allclose(mass[present], 1.0 / present.sum(), atol=1e-12)
+    assert np.allclose(mass[~present], 0.0, atol=1e-12)

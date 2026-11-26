@@ -26,3 +26,21 @@ def evaluate_losses(model, loader, config: Config, device: str, normalizer) -> d
     result = {key: value / seen for key, value in totals.items()}
     result['samples'] = seen
     return result
+
+
+@torch.no_grad()
+def evaluate_validation(
+    model, loader, config: Config, device: str, normalizer, n_samples: int = 8, ar1_params: dict | None = None,
+) -> dict[str, float]:
+    """Losses plus teacher-forced price, calibration and baseline metrics."""
+    result = evaluate_losses(model, loader, config, device, normalizer)
+    if int(result.get('samples', 0)) == 0:
+        return result
+    from olm.evaluation.metrics import collect_predictions, evaluate_predictions
+
+    data = collect_predictions(
+        model, loader, config, device, normalizer, n_samples=n_samples, ar1_params=ar1_params
+    )
+    metrics = evaluate_predictions(data).metrics
+    result.update(metrics)
+    return result

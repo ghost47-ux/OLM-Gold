@@ -25,6 +25,20 @@ def test_each_sample_reconstructs_exact_parent(tiny_config, synthetic_frames):
         assert children[-1, 3] == parent[3]
 
 
+
+def test_each_child_window_is_contiguous_and_parent_aligned(tiny_config, synthetic_frames):
+    bundle = build_datasets(tiny_config, synthetic_frames, TemporalFeatures(tiny_config.temporal))
+    for split in (bundle.train, bundle.val, bundle.test):
+        m5 = split.arrays['5min']
+        m15 = split.arrays['15min']
+        target = split.targets['target_ts'].astype('datetime64[s]').astype('datetime64[ns]')
+        child_ts = np.stack([m5.ts[split.indices + step] for step in (1, 2, 3)], axis=1)
+        expected = np.stack(
+            [target + np.timedelta64(step * 5, 'm') for step in (0, 1, 2)], axis=1
+        )
+        assert np.array_equal(child_ts, expected)
+        assert np.array_equal(m15.ts[split.targets['p15']], target)
+
 def test_context_shapes_follow_config(tiny_config, synthetic_frames):
     bundle = build_datasets(tiny_config, synthetic_frames, TemporalFeatures(tiny_config.temporal))
     item = bundle.train[0]

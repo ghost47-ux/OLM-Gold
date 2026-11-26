@@ -34,7 +34,10 @@ def block_bounds(n: int, folds: int) -> list[tuple[int, int]]:
 
 
 @torch.no_grad()
-def evaluate_sequential_blocks(model, dataset, config, device: str, normalizer, folds: int = 4, n_samples: int = 16) -> dict:
+def evaluate_sequential_blocks(
+    model, dataset, config, device: str, normalizer, folds: int = 4, n_samples: int = 16,
+    ar1_params: dict | None = None,
+) -> dict:
     if folds > len(dataset):
         raise ValueError('not enough samples for the requested number of folds')
     results: list[BlockResult] = []
@@ -42,7 +45,9 @@ def evaluate_sequential_blocks(model, dataset, config, device: str, normalizer, 
     for index, (start, end) in enumerate(block_bounds(len(dataset), folds)):
         subset = Subset(dataset, list(range(start, end)))
         loader = DataLoader(subset, batch_size=config.training.eval_batch_size, shuffle=False)
-        predictions = collect_predictions(model, loader, config, device, normalizer, n_samples=n_samples)
+        predictions = collect_predictions(
+            model, loader, config, device, normalizer, n_samples=n_samples, ar1_params=ar1_params
+        )
         evaluation = evaluate_predictions(predictions)
         free = evaluate_free_running(model, loader, config, device, normalizer)
         results.append(BlockResult(index, start, end, evaluation.n, evaluation.metrics))

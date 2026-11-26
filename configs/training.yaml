@@ -20,4 +20,6 @@ training:
   checkpoint_dir: artifacts/checkpoints
   run_dir: artifacts/runs
   log_every: 20
+  eval_samples: 8
+  day_balance: true
   device: auto

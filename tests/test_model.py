@@ -65,3 +65,24 @@ def test_context_ablation_still_runs(tiny_model_config, tiny_batch):
 def test_parameter_count_is_positive(tiny_model_config):
     model = build_model(tiny_model_config, 14)
     assert model.parameter_count() > 1000
+
+def _clone_batch(batch):
+    return {key: value.clone() for key, value in batch.items()}
+
+
+def test_teacher_forcing_uses_only_the_observed_prefix(tiny_model_config, tiny_batch):
+    model = build_model(tiny_model_config, 14).eval()
+    base = model(tiny_batch)
+
+    changed_c1 = _clone_batch(tiny_batch)
+    changed_c1["children_enc"][:, 0] += 1.0
+    out_c1 = model(changed_c1)
+    assert torch.allclose(out_c1["parent"].loc, base["parent"].loc)
+    assert torch.allclose(out_c1["children"][0].loc, base["children"][0].loc)
+    assert not torch.allclose(out_c1["children"][1].loc, base["children"][1].loc)
+
+    changed_parent = _clone_batch(tiny_batch)
+    changed_parent["parent_enc"] += 1.0
+    out_parent = model(changed_parent)
+    assert torch.allclose(out_parent["parent"].loc, base["parent"].loc)
+    assert not torch.allclose(out_parent["children"][0].loc, base["children"][0].loc)

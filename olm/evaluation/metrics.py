@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from olm.config import Config
+from olm.evaluation.baselines import predict_ar1
 from olm.models.decoding import aggregate_children_torch, decode_model_torch
 
 
@@ -32,7 +33,21 @@ def _to_model_coords(coords: torch.Tensor, normalizer) -> torch.Tensor:
 
 
 @torch.no_grad()
-def collect_predictions(model, loader, config: Config, device: str, normalizer, n_samples: int = 32) -> dict:
+def _ar1_coords(encoded: torch.Tensor, params) -> torch.Tensor:
+    coords = predict_ar1(params, encoded.detach().cpu().numpy())
+    return torch.as_tensor(coords, dtype=torch.float32, device=encoded.device)
+
+
+@torch.no_grad()
+def _ar1_prices(encoded: torch.Tensor, prev_close: torch.Tensor, params, normalizer) -> torch.Tensor:
+    coords = _ar1_coords(encoded, params)
+    return decode_model_torch(_to_model_coords(coords, normalizer), prev_close)
+
+
+def collect_predictions(
+    model, loader, config: Config, device: str, normalizer, n_samples: int = 32,
+    ar1_params: dict | None = None,
+) -> dict:
     model.eval()
     store: dict[str, list] = {
         'parent_pred': [], 'parent_pred_dominant': [], 'parent_true': [],
@@ -40,6 +55,9 @@ def collect_predictions(model, loader, config: Config, device: str, normalizer, 
         'm15_prev_close': [], 'child_prev_close': [], 'parent_nll': [], 'child_nll': [],
         'parent_samples': [], 'target_ts': [],
     }
+    if ar1_params:
+        store['parent_pred_ar1'] = []
+        store['child_pred_ar1'] = []
     generator = torch.Generator(device='cpu').manual_seed(0)
     for batch in loader:
         batch = {key: value.to(device) for key, value in batch.items()}
@@ -63,6 +81,24 @@ def collect_predictions(model, loader, config: Config, device: str, normalizer, 
             )
             for step, mixture in enumerate(outputs['children'])
         ], dim=1)
+        parent_pred_ar1 = child_pred_ar1 = None
+        if ar1_params and '15min' in ar1_params and '5min' in ar1_params:
+            parent_pred_ar1 = _ar1_prices(
+                batch['m15'][:, -1], batch['m15_prev_close'], ar1_params['15min'], normalizer
+            )
+            # Recursive M5 AR(1), not teacher-forced: each predicted candle becomes
+            # the next state. Child targets use the hierarchy reference closes, so
+            # this baseline is deliberately separate from teacher-forced child MAE.
+            child_ar1 = []
+            encoded_prev = batch['m5'][:, -1]
+            close_prev = batch['m15_prev_close']
+            for step in range(3):
+                coords = _ar1_coords(encoded_prev, ar1_params['5min'])
+                prices = decode_model_torch(_to_model_coords(coords, normalizer), close_prev)
+                child_ar1.append(prices)
+                encoded_prev = coords
+                close_prev = prices[:, 3]
+            child_pred_ar1 = torch.stack(child_ar1, dim=1)
         samples = []
         for _ in range(n_samples):
             coords = outputs['parent'].sample(generator)
@@ -76,6 +112,9 @@ def collect_predictions(model, loader, config: Config, device: str, normalizer, 
         store['parent_true'].append(batch['parent_prices'].cpu())
         store['child_pred'].append(child_pred.cpu())
         store['child_pred_dominant'].append(child_pred_dominant.cpu())
+        if parent_pred_ar1 is not None and child_pred_ar1 is not None:
+            store['parent_pred_ar1'].append(parent_pred_ar1.cpu())
+            store['child_pred_ar1'].append(child_pred_ar1.cpu())
         store['child_true'].append(batch['child_prices'].cpu())
         store['m15_prev_close'].append(batch['m15_prev_close'].cpu())
         store['child_prev_close'].append(batch['children_prev_close'].cpu())
@@ -134,6 +173,10 @@ def evaluate_predictions(data: dict) -> ForecastEvaluation:
     child_dominant = _price_metrics(data['child_pred_dominant'], child_true, child_prev)
     parent_persistence = _price_metrics(np.repeat(m15_prev[:, None], 4, axis=1), parent_true, m15_prev)
     child_persistence = _price_metrics(np.repeat(child_prev[:, :, None], 4, axis=2), child_true, child_prev)
+    parent_ar1 = child_ar1 = None
+    if 'parent_pred_ar1' in data and 'child_pred_ar1' in data:
+        parent_ar1 = _price_metrics(data['parent_pred_ar1'], parent_true, m15_prev)
+        child_ar1 = _price_metrics(data['child_pred_ar1'], child_true, child_prev)
     log_pred = np.log(np.clip(child_pred, 1e-8, None))
     agg = np.stack([
         log_pred[:, 0, 0],
@@ -168,6 +211,9 @@ def evaluate_predictions(data: dict) -> ForecastEvaluation:
         'coverage_50_mean': float(np.mean(list(coverage['coverage_50'].values()))),
         'coverage_90_mean': float(np.mean(list(coverage['coverage_90'].values()))),
     }
+    if parent_ar1 is not None and child_ar1 is not None:
+        metrics['parent_mae_ar1'] = parent_ar1['mae']
+        metrics['child_mae_ar1_recursive'] = child_ar1['mae']
     return ForecastEvaluation(
         n=int(len(parent_true)),
         metrics=metrics,
