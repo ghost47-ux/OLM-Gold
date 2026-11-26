@@ -58,6 +58,7 @@ class ModelConfig:
     h1_context: int = 32
     h4_context: int = 16
     n_scenarios: int = 32
+    parent_teacher_forcing_prob: float = 1.0
 
     def __post_init__(self) -> None:
         if self.d_model % self.n_heads != 0:
@@ -66,6 +67,8 @@ class ModelConfig:
             raise ValueError('n_components must be >= 1')
         if self.m5_context < 3:
             raise ValueError('m5_context must be at least 3')
+        if not 0.0 <= self.parent_teacher_forcing_prob <= 1.0:
+            raise ValueError('parent_teacher_forcing_prob must be in [0, 1]')
 
 
 @dataclass

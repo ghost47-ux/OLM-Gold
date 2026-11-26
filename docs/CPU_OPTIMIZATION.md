@@ -13,7 +13,7 @@ All timings below are from the development machine, not a portable benchmark:
 
 ## Measured profile
 
-Batch 64, default synthetic split (5,868 train samples), one optimizer step including forward, loss, backward and AdamW:
+Batch 64, default synthetic split (5,857 training samples after the H1/H4 point-in-time fix), one optimizer step including forward, loss, backward and AdamW:
 
 | Configuration | ms/step | Samples/s |
 | --- | ---: | ---: |

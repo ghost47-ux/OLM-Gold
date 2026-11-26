@@ -54,6 +54,17 @@ def _index_map(target_ts: np.ndarray, source_ts: np.ndarray) -> np.ndarray:
     return np.searchsorted(source_ts, target_ts, side='right') - 1
 
 
+def _completed_index(target_ts: np.ndarray, source_ts: np.ndarray, minutes: int) -> np.ndarray:
+    """Index of the last source bar whose close is at or before each target timestamp.
+
+    A bar stamped at its open time T covers [T, T + minutes).  Using it while the
+    bar is still open would expose the future target candles; this is the core
+    point-in-time guard for the H1/H4 context windows.
+    """
+    closes = source_ts + np.timedelta64(int(minutes), 'm')
+    return np.searchsorted(closes, target_ts, side='right') - 1
+
+
 def _candidate_samples(m5: ResolutionArrays, m15: ResolutionArrays, h1: ResolutionArrays, h4: ResolutionArrays, config: Config):
     n = len(m5.ts)
     horizon = 3
@@ -62,8 +73,8 @@ def _candidate_samples(m5: ResolutionArrays, m15: ResolutionArrays, h1: Resoluti
     minute_of_day = (m5.ts.astype('datetime64[m]').astype(np.int64) // 15) * 15
     aligned = m5.ts.astype('datetime64[m]').astype(np.int64) % 15 == 0
     p15_map = _index_map(m5.ts, m15.ts)
-    h1_map = _index_map(m5.ts, h1.ts)
-    h4_map = _index_map(m5.ts, h4.ts)
+    h1_map = _completed_index(m5.ts, h1.ts, 60)
+    h4_map = _completed_index(m5.ts, h4.ts, 240)
     cand = []
     rejected = {'alignment': 0, 'history': 0, 'aggregation': 0}
     for i in range(n - horizon):
@@ -72,8 +83,8 @@ def _candidate_samples(m5: ResolutionArrays, m15: ResolutionArrays, h1: Resoluti
             rejected['alignment'] += 1
             continue
         p15 = int(p15_map[k])
-        j1 = int(h1_map[i])
-        j4 = int(h4_map[i])
+        j1 = int(h1_map[k])
+        j4 = int(h4_map[k])
         if (
             p15 < 0 or p15 >= len(m15.ts) or m15.ts[p15] != m5.ts[k]
             or p15 - config.model.m15_context + 1 < 0
@@ -244,13 +255,27 @@ def build_datasets(config: Config, frames: dict[str, pd.DataFrame], temporal) ->
 
 
 def leakage_check(bundle: DatasetBundle) -> dict:
-    """Assert chronological separation between splits (target timestamps)."""
+    """Assert chronological split separation and point-in-time context windows."""
     def bounds(dataset: OLMDataset) -> tuple[int, int]:
         values = dataset.targets['target_ts']
         return (int(values.min()), int(values.max())) if len(values) else (0, 0)
 
+    def context_check(dataset: OLMDataset) -> dict:
+        target_ns = dataset.targets['target_ts'].astype('datetime64[s]').astype('datetime64[ns]')
+        checks = {}
+        for name, minutes in (('1h', 60), ('4h', 240)):
+            index = dataset.targets['j1' if name == '1h' else 'j4']
+            closes = dataset.arrays[name].ts[index] + np.timedelta64(minutes, 'm')
+            checks[name] = {
+                'leaking': int(np.sum(closes > target_ns)),
+                'samples': int(len(target_ns)),
+            }
+        return checks
+
     train = bounds(bundle.train)
     val = bounds(bundle.val)
     test = bounds(bundle.test)
-    ok = train[1] < val[0] and val[1] < test[0]
-    return {'ok': ok, 'train': train, 'val': val, 'test': test}
+    contexts = {name: context_check(getattr(bundle, name)) for name in ('train', 'val', 'test')}
+    context_ok = all(item['leaking'] == 0 for split in contexts.values() for item in split.values())
+    ok = train[1] < val[0] and val[1] < test[0] and context_ok
+    return {'ok': ok, 'train': train, 'val': val, 'test': test, 'contexts': contexts}

@@ -35,7 +35,8 @@ def _to_model_coords(coords: torch.Tensor, normalizer) -> torch.Tensor:
 def collect_predictions(model, loader, config: Config, device: str, normalizer, n_samples: int = 32) -> dict:
     model.eval()
     store: dict[str, list] = {
-        'parent_pred': [], 'parent_true': [], 'child_pred': [], 'child_true': [],
+        'parent_pred': [], 'parent_pred_dominant': [], 'parent_true': [],
+        'child_pred': [], 'child_pred_dominant': [], 'child_true': [],
         'm15_prev_close': [], 'child_prev_close': [], 'parent_nll': [], 'child_nll': [],
         'parent_samples': [], 'target_ts': [],
     }
@@ -53,6 +54,15 @@ def collect_predictions(model, loader, config: Config, device: str, normalizer, 
             for step, mixture in enumerate(outputs['children'])
         ]
         child_pred = torch.stack(children, dim=1)
+        parent_pred_dominant = decode_model_torch(
+            _to_model_coords(outputs['parent'].dominant_mean(), normalizer), batch['m15_prev_close']
+        )
+        child_pred_dominant = torch.stack([
+            decode_model_torch(
+                _to_model_coords(mixture.dominant_mean(), normalizer), batch['children_prev_close'][:, step]
+            )
+            for step, mixture in enumerate(outputs['children'])
+        ], dim=1)
         samples = []
         for _ in range(n_samples):
             coords = outputs['parent'].sample(generator)
@@ -62,8 +72,10 @@ def collect_predictions(model, loader, config: Config, device: str, normalizer, 
         parent_nll = -outputs['parent'].log_prob(batch['parent_enc'])
         child_nll = torch.stack([-m.log_prob(batch['children_enc'][:, step]) for step, m in enumerate(outputs['children'])], 1)
         store['parent_pred'].append(parent_pred.cpu())
+        store['parent_pred_dominant'].append(parent_pred_dominant.cpu())
         store['parent_true'].append(batch['parent_prices'].cpu())
         store['child_pred'].append(child_pred.cpu())
+        store['child_pred_dominant'].append(child_pred_dominant.cpu())
         store['child_true'].append(batch['child_prices'].cpu())
         store['m15_prev_close'].append(batch['m15_prev_close'].cpu())
         store['child_prev_close'].append(batch['children_prev_close'].cpu())
@@ -118,6 +130,10 @@ def evaluate_predictions(data: dict) -> ForecastEvaluation:
     child_prev = data['child_prev_close']
     parent_metrics = _price_metrics(parent_pred, parent_true, m15_prev)
     child_metrics = _price_metrics(child_pred, child_true, child_prev)
+    parent_dominant = _price_metrics(data['parent_pred_dominant'], parent_true, m15_prev)
+    child_dominant = _price_metrics(data['child_pred_dominant'], child_true, child_prev)
+    parent_persistence = _price_metrics(np.repeat(m15_prev[:, None], 4, axis=1), parent_true, m15_prev)
+    child_persistence = _price_metrics(np.repeat(child_prev[:, :, None], 4, axis=2), child_true, child_prev)
     log_pred = np.log(np.clip(child_pred, 1e-8, None))
     agg = np.stack([
         log_pred[:, 0, 0],
@@ -136,7 +152,11 @@ def evaluate_predictions(data: dict) -> ForecastEvaluation:
     metrics = {
         'parent_mae': parent_metrics['mae'],
         'parent_normalized_mae': parent_metrics['normalized_mae'],
+        'parent_mae_dominant': parent_dominant['mae'],
+        'parent_mae_persistence': parent_persistence['mae'],
         'child_mae': child_metrics['mae'],
+        'child_mae_dominant': child_dominant['mae'],
+        'child_mae_persistence': child_persistence['mae'],
         'child_normalized_mae': child_metrics['normalized_mae'],
         'body_error': child_metrics['body_error'],
         'wick_error': child_metrics['wick_error'],

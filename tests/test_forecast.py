@@ -50,12 +50,19 @@ def test_forecast_scenarios_are_coherent(tiny_config, synthetic_frames, tmp_path
         assert scenario['coherent'] is True
     assert payload['diagnostics']['scenarios'] == 5
 
+    arrays = forecaster._arrays(synthetic_frames)
+    i, p15, j1, j4 = forecaster._latest_context(arrays)
+    target_start = arrays['5min'].ts[i] + np.timedelta64(5, 'm')
+    # p15 may equal len(m15): the next parent has not formed yet, which is a valid forecast origin.
+    assert p15 == len(arrays['15min'].ts) or arrays['15min'].ts[p15] == target_start
+    assert arrays['1h'].ts[j1] + np.timedelta64(60, 'm') <= target_start
+    assert arrays['4h'].ts[j4] + np.timedelta64(240, 'm') <= target_start
+
 
 def test_derived_context_is_aligned_and_exact(synthetic_frames):
     from olm.inference.forecast import derive_context_frames
 
-    m5 = synthetic_frames['1min']
-    m5 = m5.rename(columns={'timestamp': 'timestamp'})
+    m5 = synthetic_frames['5min']
     derived = derive_context_frames(m5)
     assert set(derived) == {'5min', '15min', '1h', '4h'}
     assert derived['5min']['timestamp'].is_monotonic_increasing

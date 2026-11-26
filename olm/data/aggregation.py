@@ -94,12 +94,48 @@ def aggregate_blocks(frame: pd.DataFrame, factor: int) -> pd.DataFrame:
     return agg.drop(columns=['bar_count']).reset_index(drop=True)
 
 
+def aggregate_buckets(frame: pd.DataFrame, minutes: int, source_minutes: int) -> pd.DataFrame:
+    """Aggregate aligned buckets while preserving market closures.
+
+    Unlike aggregate_blocks this accepts gaps between buckets, which is required
+    for live data that spans weekends or session breaks. Incomplete or internally
+    gapped buckets are dropped rather than fabricated; callers receive only
+    buckets with exactly `minutes / source_minutes` contiguous source candles.
+    """
+    if minutes <= 0 or source_minutes <= 0 or minutes % source_minutes:
+        raise ValueError('minutes must be a positive multiple of source_minutes')
+    factor = minutes // source_minutes
+    out = _prepare(frame)
+    if out.empty:
+        return out.iloc[0:0]
+    bucket = out['timestamp'].dt.floor(f'{minutes}min')
+    grouped = out.groupby(bucket, sort=True)
+    agg = grouped.agg(
+        timestamp=('timestamp', 'first'),
+        open=('open', 'first'),
+        high=('high', 'max'),
+        low=('low', 'min'),
+        close=('close', 'last'),
+        bar_count=('open', 'size'),
+    )
+    internal = grouped['timestamp'].diff().dropna()
+    contiguous = internal.groupby(bucket.loc[internal.index]).apply(
+        lambda values: bool((values == pd.Timedelta(minutes=source_minutes)).all())
+    )
+    valid = (agg['bar_count'] == factor) & agg.index.to_series().map(contiguous).fillna(False).to_numpy()
+    return agg.loc[valid].drop(columns=['bar_count']).reset_index(drop=True)
+
+
 def build_resolutions(m1: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """Build M5/M15/H1/H4 candles from M1 by exact block aggregation."""
-    m5 = aggregate_blocks(m1, 5)
-    m15 = aggregate_blocks(m1, 15)
-    h1 = aggregate_blocks(m1, 60)
-    h4 = aggregate_blocks(m1, 240)
+    """Build M5/M15/H1/H4 candles from M1 by aligned bucket aggregation.
+
+    Buckets spanning a market closure or missing minute are dropped, never
+    filled; downstream hierarchy checks still require exact 3xM5 parents.
+    """
+    m5 = aggregate_buckets(m1, 5, 1)
+    m15 = aggregate_buckets(m1, 15, 1)
+    h1 = aggregate_buckets(m1, 60, 1)
+    h4 = aggregate_buckets(m1, 240, 1)
     return {'1min': _prepare(m1), '5min': m5, '15min': m15, '1h': h1, '4h': h4}
 
 

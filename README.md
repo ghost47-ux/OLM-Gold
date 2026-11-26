@@ -27,7 +27,7 @@ Dataset construction rejects any candidate whose M5 children do not reconstruct 
 - Chronological train/validation/test splits with an embargo, training-only normalizer, complete checkpoints, resume, early stopping, JSONL metrics.
 - Point, probabilistic and calibration metrics (MAE, model-space NLL, CRPS, 50/90% coverage, aggregation error), free-running multi-step evaluation, sequential time-block stability reports, baselines.
 - FastAPI service (`/health`, `/v1/model`, `/v1/forecast`, `/v1/actual`, `/v1/predictions/{id}`), append-only forecast log, PSI/KS drift checks, experiment tracker and champion/challenger registry.
-- 51 offline tests covering encoding, aggregation, validation, provider parsing, credentials, splits, model shapes, losses, training, inference, API and monitoring.
+- 55 offline tests covering encoding, aggregation, validation, provider parsing, credentials, splits, point-in-time context, model shapes, losses, training, inference, API and monitoring.
 
 ## Quick start (Windows, CPU)
 
@@ -58,8 +58,10 @@ Generate a labeled synthetic fixture, prepare tensors, train and evaluate:
 3. Inspect the plan without spending API credits:
 
 ```powershell
-.\.venv\Scripts\python.exe -m olm download-history --dry-run --intervals 5min 15min 1h 4h --json
+.\.venv\Scripts\python.exe -m olm download-history --dry-run --start 2024-01-01 --end 2026-12-31 --intervals 1min 5min 15min 1h 4h --concurrency 4 --json
 ```
+
+The planner splits each interval into <=5,000-record windows (234 requests for 1-minute data over 2024-2026, 47 for M5) and reports the exact count before any network call.
 
 4. Enable `TD_DATA_RETENTION_APPROVED=true` only after written permission to retain the data. Then run the same command without `--dry-run`.
 5. Enable `TD_MODEL_TRAINING_APPROVED=true` only after written permission to train on the data. The training command refuses provider-sourced data otherwise.
@@ -72,6 +74,8 @@ See [docs/DATA_LICENSE_AND_PROVIDER_NOTES.md](docs/DATA_LICENSE_AND_PROVIDER_NOT
 - Splits are chronological: 70% train, 15% validation, 15% test, with a 60-minute embargo. Timestamps never cross splits.
 - The normalizer is fit **only** on M5 rows before the training cutoff, then applied to every resolution.
 - Samples need full M5/M15/H1/H4 context before the target, so the first usable part of the sample is discarded rather than padded.
+- H1/H4 context is selected from the last bar that has **closed at or before the target start**. The earlier implementation selected the bar containing the target, which leaked future prices; `leakage_check` now asserts zero leaking context bars in every split.
+- Market closures stay as timestamp gaps. Aggregation never fills missing candles; incomplete buckets are dropped.
 - Teacher-forced one-step metrics and free-running three-child scenarios are reported separately; falling training loss alone is not evidence of forecast skill.
 
 ## CLI
@@ -126,10 +130,12 @@ docs/            design, research decisions, data dictionary, guides, notes
 - [CPU optimization](docs/CPU_OPTIMIZATION.md)
 - [Data license and provider notes](docs/DATA_LICENSE_AND_PROVIDER_NOTES.md)
 - [Experiment log](docs/EXPERIMENT_LOG.md)
+- [Audit report](docs/AUDIT_REPORT.md)
 
 ## Known limitations
 
-- The published checkpoint is trained on **synthetic** data; its metrics show that the pipeline learns the generated process, not that it forecasts gold.
+- The current demonstration checkpoint is trained on **synthetic** data for one epoch; its metrics show an underfit model, not that it forecasts gold. The earlier 12-epoch synthetic checkpoint is invalid for evaluation because it was trained with H1/H4 lookahead.
+- The live 2024-2026 backfill has not been run in this repository: no API keys are present and the retention/training gates remain closed. See [the audit](docs/AUDIT_REPORT.md) for exact status.
 - No live brokerage integration, execution, position sizing or P&L claims.
 - Twelve Data plans, symbol coverage and rate limits vary by account; verify entitlements before relying on the ingestion path.
 - The coherence projection enforces the OHLC hierarchy after sampling. It improves internal consistency but can mask raw parent/child disagreement; the raw gap is always reported.

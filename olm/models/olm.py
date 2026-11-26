@@ -102,8 +102,16 @@ class OLMModel(nn.Module):
         parent = self.parent_head(state)
         result = {'state': state, 'parent': parent, 'kl': kl}
         if 'parent_enc' in batch:
+            parent_conditioning = batch['parent_enc']
+            probability = float(self.config.parent_teacher_forcing_prob)
+            if self.training and probability < 1.0 and len(parent_conditioning):
+                # Scheduled teacher forcing: feed a predicted parent sample to the
+                # child decoder so it sees the distribution it will face at inference.
+                use_prediction = torch.rand(len(parent_conditioning), device=parent_conditioning.device) >= probability
+                sampled_parent = parent.sample()
+                parent_conditioning = torch.where(use_prediction.unsqueeze(-1), sampled_parent, parent_conditioning)
             result['children'] = self.child_decoder.forward_teacher(
-                state, batch['parent_enc'], batch['children_enc']
+                state, parent_conditioning, batch['children_enc']
             )
         return result
 

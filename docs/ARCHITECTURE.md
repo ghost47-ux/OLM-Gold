@@ -118,7 +118,7 @@ The projection guarantees consistency. It is **not** a probabilistic correction;
 
 ## 8. Splits and leakage
 
-Candidate samples are indexed by the first child's M5 bar. The target timestamp is the first child timestamp. Boundaries are computed from target timestamps and enforced with a 60-minute embargo. Context windows must lie entirely before the target. The normalizer is fit on M5 rows earlier than the training boundary and then frozen for all splits and resolutions.
+Candidate samples are indexed by the first child's M5 bar. The target timestamp is the first child timestamp. Boundaries are computed from target timestamps and enforced with a 60-minute embargo. Context windows must lie entirely before the target. M15 context stops before the parent; H1/H4 use only the last bar whose close (`open + interval`) is at or before the target start. The normalizer is fit on M5 rows earlier than the training boundary and then frozen for all splits and resolutions. `leakage_check` asserts zero H1/H4 bars with a close after the target in every split.
 
 ## 9. Inference payloads
 
@@ -132,7 +132,7 @@ Candidate samples are indexed by the first child's M5 bar. The target timestamp 
 }
 ```
 
-Response: `as_of`, `parent_distribution` (expected candle + q05/q50/q95), `scenarios` (each with parent, three children and `coherent`), `diagnostics`, `forecast_id`, `model_version`, `disclaimer`.
+Response: `as_of`, `parent_distribution` (mixture-mean `expected` candle, `dominant_component` diagnostic, and q05/q50/q95), `scenarios` (each with parent, three children and `coherent`), `diagnostics`, `forecast_id`, `model_version`, `disclaimer`. The mixture mean is the mathematical expectation; when low-weight components are far from the data it can be a poor point estimate, so both views are returned.
 
 `POST /v1/actual`:
 

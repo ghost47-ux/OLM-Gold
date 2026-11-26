@@ -4,7 +4,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from olm.data.aggregation import AggregationError, aggregate_blocks, aggregate_ohlc, build_resolutions, reconstruct_parent
+from olm.data.aggregation import (
+    AggregationError,
+    aggregate_blocks,
+    aggregate_buckets,
+    aggregate_ohlc,
+    build_resolutions,
+    reconstruct_parent,
+)
 
 
 def _m1(rows=480, start='2024-01-01'):
@@ -37,6 +44,13 @@ def test_aggregate_blocks_rejects_gaps():
     m1 = _m1(60).drop(index=17).reset_index(drop=True)
     with pytest.raises(AggregationError):
         aggregate_blocks(m1, 5)
+
+
+def test_aggregate_buckets_preserves_closures_and_drops_partial_buckets():
+    m1 = _m1(60).drop(index=range(20, 25)).reset_index(drop=True)
+    result = aggregate_buckets(m1, 5, 1)
+    assert len(result) == 11
+    assert pd.Timedelta(minutes=10) in result['timestamp'].diff().dropna().tolist()
 
 
 def test_aggregate_ohlc_rejects_incomplete_bucket():

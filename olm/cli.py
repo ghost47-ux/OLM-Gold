@@ -185,6 +185,7 @@ def cmd_download_history(args) -> int:
                 end=pd.Timestamp(args.end, tz='UTC') if args.end else None,
                 gates=gates,
                 resume=not args.no_resume,
+                concurrency=args.concurrency,
                 max_windows=args.max_windows,
             )
     finally:
@@ -234,6 +235,12 @@ def _training_gate(source: str, info: dict) -> None:
 
 def cmd_train(args) -> int:
     config = _config(args)
+    if args.threads is not None:
+        torch.set_num_threads(max(1, int(args.threads)))
+    if args.parent_teacher_forcing is not None:
+        config.model.parent_teacher_forcing_prob = float(args.parent_teacher_forcing)
+    if args.num_workers is not None:
+        config.training.num_workers = int(args.num_workers)
     if args.epochs is not None:
         config.training.epochs = args.epochs
     if args.max_steps is not None:
@@ -301,6 +308,8 @@ def cmd_evaluate(args) -> int:
 
 def cmd_benchmark(args) -> int:
     config = _config(args)
+    if args.threads is not None:
+        torch.set_num_threads(max(1, int(args.threads)))
     bundle, _ = prepare_datasets(config, source=args.source, validate=False)
     model = build_model(config.model, bundle.meta['temporal_dim'])
     device = resolve_device(config.training.device)
@@ -428,8 +437,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser('download-history')
     _add_common(p); p.add_argument('--symbol', default='XAU/USD')
-    p.add_argument('--intervals', nargs='+', default=['5min'], choices=['1min', '5min', '15min', '1h', '4h'])
+    p.add_argument('--intervals', nargs='+', default=['5min', '15min', '1h', '4h'], choices=['1min', '5min', '15min', '1h', '4h'])
     p.add_argument('--start', default=None); p.add_argument('--end', default=None)
+    p.add_argument('--concurrency', type=int, default=None, help='parallel partition downloads (1-7; default TD_MAX_CONCURRENCY or 4)')
     p.add_argument('--max-windows', type=int, default=None); p.add_argument('--no-resume', action='store_true'); p.add_argument('--dry-run', action='store_true'); p.add_argument('--json', action='store_true')
     p.set_defaults(func=cmd_download_history)
 
@@ -448,6 +458,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--epochs', type=int, default=None); p.add_argument('--max-steps', type=int, default=None)
     p.add_argument('--batch-size', type=int, default=None); p.add_argument('--lr', type=float, default=None)
     p.add_argument('--no-context', action='store_true'); p.add_argument('--device', default=None)
+    p.add_argument('--threads', type=int, default=None, help='PyTorch CPU threads')
+    p.add_argument('--num-workers', type=int, default=None, help='DataLoader worker processes')
+    p.add_argument('--parent-teacher-forcing', type=float, default=None, help='probability of feeding the actual parent to the child decoder (1.0 = full teacher forcing)')
     p.add_argument('--skip-validation', action='store_true'); p.add_argument('--json', action='store_true')
     p.set_defaults(func=cmd_train)
 
@@ -459,7 +472,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser('benchmark')
     _add_common(p); p.add_argument('--source', default='auto', choices=['auto', 'synthetic', 'twelvedata'])
-    p.add_argument('--batch-size', type=int, default=32); p.add_argument('--steps', type=int, default=5); p.add_argument('--warmup', type=int, default=2); p.add_argument('--json', action='store_true')
+    p.add_argument('--batch-size', type=int, default=32); p.add_argument('--steps', type=int, default=5); p.add_argument('--warmup', type=int, default=2)
+    p.add_argument('--threads', type=int, default=None); p.add_argument('--json', action='store_true')
     p.set_defaults(func=cmd_benchmark)
 
     p = sub.add_parser('forecast')

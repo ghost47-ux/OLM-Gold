@@ -70,6 +70,12 @@ def validate_frame(frame: pd.DataFrame, interval_minutes: int | None = None) -> 
     if np.nansum(bad_low):
         report.errors.append(f'{int(np.nansum(bad_low))} rows have low > min(open, close)')
     sorted_ts = ts.dropna().sort_values().drop_duplicates()
+    if interval_minutes and len(sorted_ts):
+        misaligned = int((sorted_ts != sorted_ts.dt.floor(f'{interval_minutes}min')).sum())
+        if misaligned:
+            report.errors.append(
+                f'{misaligned} timestamps are not aligned to {interval_minutes}-minute UTC boundaries'
+            )
     if len(sorted_ts) > 1:
         diffs = sorted_ts.diff().dropna().dt.total_seconds() / 60.0
         inferred = int(round(float(diffs.min())))

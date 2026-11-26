@@ -102,7 +102,7 @@ One sample is one target M15 parent:
 | `m15_prev_close` | previous M15 close used to encode/decode the parent |
 | `children_prev_close` | `(3,)` previous closes: parent open, C1 close, C2 close |
 
-Context windows end before `target_ts`. The M15 context stops at `p15-1`; the H1/H4 contexts stop at the last completed bar at `i`.
+Context windows end before `target_ts`. The M15 context stops at `p15-1`; H1/H4 use the last bar whose close (`open + interval`) is `<= target_ts`, so no context bar contains future target prices.
 
 ## Split manifest
 

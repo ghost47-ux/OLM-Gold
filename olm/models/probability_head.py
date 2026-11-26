@@ -36,6 +36,18 @@ class MixtureOutput:
         weights = self.component_probs().unsqueeze(-1)
         return (weights * self.loc).sum(dim=1)
 
+    def dominant_index(self) -> torch.Tensor:
+        """Index of the highest-weight mixture component, shape (B,)."""
+        return self.component_probs().argmax(dim=-1)
+
+    def dominant_mean(self) -> torch.Tensor:
+        """Mean of the highest-weight component, shape (B, 4).
+
+        This is a robust point estimate, not the mixture expectation: a tiny
+        far-away component can otherwise dominate the mixture mean in price space.
+        """
+        return self.loc[torch.arange(self.loc.shape[0], device=self.loc.device), self.dominant_index()]
+
     def sample(self, generator: torch.Generator | None = None) -> torch.Tensor:
         """Draw one sample per row, shape (B, 4)."""
         probs = self.component_probs()

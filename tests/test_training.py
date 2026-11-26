@@ -68,7 +68,7 @@ def test_training_decreases_loss_on_a_fixed_batch(tiny_config, synthetic_frames)
         optimizer.zero_grad(set_to_none=True)
         loss = compute_losses(model(batch), batch, tiny_config, bundle.normalizer).total
         if first is None:
-            first = float(loss)
+            first = float(loss.detach())
         loss.backward()
         optimizer.step()
-    assert float(loss) < first
+    assert float(loss.detach()) < first

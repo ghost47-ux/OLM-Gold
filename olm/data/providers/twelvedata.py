@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -85,10 +86,34 @@ class TwelveDataClient:
         self.timeout = timeout
         self.max_retries = max(1, max_retries)
         self.retry_delay = retry_delay
-        self.session = session or requests.Session()
+        self._local = threading.local()
+        self._sessions: list[requests.Session] = []
+        self._sessions_lock = threading.Lock()
+        if session is not None:
+            self._local.session = session
+            self._sessions.append(session)
+
+    def _session(self) -> requests.Session:
+        """Return a session owned by the current thread.
+
+        requests.Session is not documented as thread-safe; parallel partition
+        downloads therefore get one session per worker instead of sharing a
+        connection pool and cookie jar.
+        """
+        current = getattr(self._local, 'session', None)
+        if current is None:
+            current = requests.Session()
+            self._local.session = current
+            with self._sessions_lock:
+                self._sessions.append(current)
+        return current
 
     def close(self) -> None:
-        self.session.close()
+        with self._sessions_lock:
+            for session in self._sessions:
+                session.close()
+            self._sessions.clear()
+        self._local = threading.local()
 
     def __enter__(self) -> 'TwelveDataClient':
         return self
@@ -103,7 +128,7 @@ class TwelveDataClient:
             request_params = dict(params)
             request_params['apikey'] = credential.key
             try:
-                response = self.session.get(
+                response = self._session().get(
                     f'{self.base_url}{endpoint}', params=request_params, timeout=self.timeout
                 )
             except requests.RequestException as exc:

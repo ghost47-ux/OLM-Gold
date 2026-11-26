@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import numpy as np
-import torch
+from dataclasses import replace
 
-from olm.models.decoding import aggregate_children_torch
+import numpy as np
+
+from olm.models.olm import OLMModel, build_model
 
 
 def persistence_forecast(last_close: np.ndarray) -> np.ndarray:
@@ -30,13 +31,10 @@ def predict_ar1(model_params: tuple[np.ndarray, np.ndarray], encoded: np.ndarray
     return intercept + encoded @ transition
 
 
-class M5OnlyBaseline(torch.nn.Module):
-    """Ablation: the same backbone without M15/H1/H4 context or hierarchy."""
+def build_m5_only_model(config, temporal_dim: int) -> OLMModel:
+    """Build the genuine M5-only ablation: no M15/H1/H4 context, same heads.
 
-    def __init__(self, model) -> None:
-        super().__init__()
-        self.model = model
-
-    def forward(self, batch: dict) -> dict:
-        stripped = dict(batch)
-        return self.model(stripped)
+    This must be trained separately with `python -m olm train --no-context`;
+    wrapping an already-trained context model would not be a valid ablation.
+    """
+    return build_model(replace(config, use_context=False), temporal_dim)

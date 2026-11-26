@@ -31,7 +31,8 @@ def load_market_frames(config: Config, source: str = 'auto') -> tuple[dict[str, 
     synthetic_available = all(_synthetic_path(paths, interval).exists() for interval in RESOLUTIONS)
     real_available = all(_real_path(paths, config.data.symbol, interval).exists() for interval in RESOLUTIONS)
     if source == 'auto':
-        source = 'synthetic' if synthetic_available else ('twelvedata' if real_available else 'none')
+        # Prefer licensed provider data over a synthetic fixture when both exist.
+        source = 'twelvedata' if real_available else ('synthetic' if synthetic_available else 'none')
     frames = {}
     if source == 'synthetic':
         for interval in RESOLUTIONS:

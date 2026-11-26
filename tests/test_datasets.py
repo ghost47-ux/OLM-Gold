@@ -34,6 +34,15 @@ def test_context_shapes_follow_config(tiny_config, synthetic_frames):
     assert item['h4'].shape == (tiny_config.model.h4_context, 4)
 
 
+def test_higher_timeframe_context_bars_are_complete(tiny_config, synthetic_frames):
+    bundle = build_datasets(tiny_config, synthetic_frames, TemporalFeatures(tiny_config.temporal))
+    for split in (bundle.train, bundle.val, bundle.test):
+        target = split.targets['target_ts'].astype('datetime64[s]').astype('datetime64[ns]')
+        for name, minutes, key in (('1h', 60, 'j1'), ('4h', 240, 'j4')):
+            closes = split.arrays[name].ts[split.targets[key]] + np.timedelta64(minutes, 'm')
+            assert (closes <= target).all(), f'{name} context leaks future candles'
+
+
 def test_normalizer_fitted_only_on_train(tiny_config, synthetic_frames):
     bundle = build_datasets(tiny_config, synthetic_frames, TemporalFeatures(tiny_config.temporal))
     assert np.isfinite(bundle.normalizer.mean).all()

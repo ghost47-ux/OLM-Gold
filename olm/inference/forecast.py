@@ -11,7 +11,7 @@ import pandas as pd
 import torch
 
 from olm.config import Config, ModelConfig
-from olm.data.aggregation import aggregate_blocks
+from olm.data.aggregation import aggregate_buckets
 from olm.data.calendar import TemporalFeatures
 from olm.data.datasets import ResolutionArrays, context_batch, prepare_resolution
 from olm.data.encoding import decode_model
@@ -70,17 +70,16 @@ def derive_context_frames(m5: pd.DataFrame) -> dict[str, pd.DataFrame]:
     frame = m5.copy()
     frame['timestamp'] = pd.to_datetime(frame['timestamp'], utc=True)
     frame = frame.sort_values('timestamp').reset_index(drop=True)
+    if len(frame) > 1:
+        step = frame['timestamp'].diff().dropna().dt.total_seconds().div(60).min()
+        if not np.isclose(step, 5.0):
+            raise ValueError(f'derive_context_frames expects 5-minute candles, got {step:g}-minute spacing')
     frames = {'5min': frame}
-    for name, factor, minutes in (('15min', 3, 15), ('1h', 12, 60), ('4h', 48, 240)):
-        start = frame['timestamp'].dt.minute % minutes == 0
-        if not start.any():
-            raise ValueError(f'history has no {minutes}-minute aligned boundary')
-        first = int(np.argmax(start.to_numpy()))
-        trimmed = frame.iloc[first:].reset_index(drop=True)
-        usable = len(trimmed) - (len(trimmed) % factor)
-        if usable < factor:
-            raise ValueError(f'not enough M5 candles to build {name}')
-        frames[name] = aggregate_blocks(trimmed.iloc[:usable], factor)
+    for name, minutes in (('15min', 15), ('1h', 60), ('4h', 240)):
+        built = aggregate_buckets(frame, minutes, 5)
+        if built.empty:
+            raise ValueError(f'not enough complete M5 candles to build {name}')
+        frames[name] = built
     return frames
 
 
@@ -125,8 +124,9 @@ class Forecaster:
             p15 = int(np.searchsorted(m15.ts, m5.ts[i] + np.timedelta64(5, 'm'), side='left'))
             if p15 < cfg.m15_context:
                 continue
-            j1 = int(np.searchsorted(arrays['1h'].ts, m5.ts[i], side='right')) - 1
-            j4 = int(np.searchsorted(arrays['4h'].ts, m5.ts[i], side='right')) - 1
+            target_start = m5.ts[i] + np.timedelta64(5, 'm')
+            j1 = int(np.searchsorted(arrays['1h'].ts + np.timedelta64(60, 'm'), target_start, side='right')) - 1
+            j4 = int(np.searchsorted(arrays['4h'].ts + np.timedelta64(240, 'm'), target_start, side='right')) - 1
             if j1 - cfg.h1_context + 1 < 0 or j4 - cfg.h4_context + 1 < 0:
                 continue
             return i, p15, j1, j4
@@ -195,10 +195,15 @@ class Forecaster:
                 'children': [_candle_dict(projected[index, step]) for step in range(3)],
                 'coherent': bool(projected_gap <= 1e-6),
             })
+        mixture_mean_prices = decode_model(
+            self.normalizer.inverse(parent_mixture.mean()[0].cpu().numpy()), parent_prev_close
+        )
+        dominant_prices = decode_model(
+            self.normalizer.inverse(parent_mixture.dominant_mean()[0].cpu().numpy()), parent_prev_close
+        )
         parent_summary = {
-            'expected': _candle_dict(decode_model(
-                self.normalizer.inverse(parent_mixture.mean()[0].cpu().numpy()), parent_prev_close
-            )),
+            'expected': _candle_dict(mixture_mean_prices),
+            'dominant_component': _candle_dict(dominant_prices),
             'quantiles': {},
             'prev_close': parent_prev_close,
         }

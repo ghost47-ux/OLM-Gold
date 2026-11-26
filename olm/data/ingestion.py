@@ -55,7 +55,7 @@ def plan_windows(
         return []
     span = pd.Timedelta(minutes=minutes * int(max_records * safety))
     windows = []
-    cursor = start.floor(f'{minutes}min')
+    cursor = start.ceil(f'{minutes}min')
     while cursor < end:
         window_end = min(cursor + span, end)
         windows.append(Window(cursor, window_end))
@@ -204,8 +204,8 @@ class IngestionService:
             pending = pending[:max_windows]
         if not pending:
             return {'status': 'already-complete', 'windows': len(windows), 'downloaded': 0}
-        concurrency = concurrency or int(os.environ.get('TD_MAX_CONCURRENCY', '1'))
-        concurrency = max(1, min(concurrency, 4))
+        concurrency = concurrency or int(os.environ.get('TD_MAX_CONCURRENCY', '4'))
+        concurrency = max(1, min(concurrency, 7))
         downloaded = 0
         failures = []
         partition_dir = self._partition_dir(symbol, interval)
@@ -215,7 +215,10 @@ class IngestionService:
                 symbol=symbol,
                 interval=interval,
                 start_date=window.api_start(),
-                end_date=window.api_end(),
+                # The provider end_date is inclusive. Windows are [start, end),
+                # so stop one bar before the window end to avoid an incomplete
+                # current candle and avoid duplicating the next window's first bar.
+                end_date=(window.end - pd.Timedelta(minutes=minutes)).strftime('%Y-%m-%d %H:%M:%S'),
                 outputsize=MAX_RECORDS_PER_REQUEST,
             )
             return window, payload

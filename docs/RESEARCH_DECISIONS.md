@@ -121,3 +121,18 @@ This file records choices that materially affect what the model can claim. Numbe
 **Why:** provider terms and account ownership are external constraints, not configuration preferences. A convenience default that enables bulk retention would be unsafe.
 
 **Risk:** users can set the gates to true without actually having permission. The software cannot verify a contract; the documentation and error messages state the requirement.
+## D15. Point-in-time H1/H4 context and gap-preserving aggregation
+
+**Decision:** H1 and H4 context uses the last bar whose close is at or before the target start. Market closures remain gaps; `aggregate_buckets` drops incomplete or internally gapped buckets instead of fabricating a candle.
+
+**Why:** the original index-by-open rule selected the bar containing the target, so its close was future information. The audit found 100% leakage in all splits. Gap-filling would instead invent prices across weekends and holidays.
+
+**Trade-off:** sample counts drop slightly at boundaries, and a context window can span a weekend. That is correct: the model sees the real elapsed time and the lifecycle features, not imputed candles.
+
+## D16. Scheduled predicted-parent exposure
+
+**Decision:** `parent_teacher_forcing_prob` controls the probability of feeding the actual parent embedding to the child decoder during training; the rest of the batch receives a sampled parent. The default is 1.0 (full teacher forcing) for backward compatibility.
+
+**Why:** the child decoder is trained on the actual parent but at inference it must consume a predicted parent. Lowering the probability later in training exposes it to its own errors without discarding the stable early signal.
+
+**Risk:** too much predicted-parent exposure early destabilizes the child loss. Start at 1.0, anneal only after validation loss has plateaued, and compare free-running metrics, not training loss.
